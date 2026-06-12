@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Not sandboxed: the app spawns a Python (Home Assistant) child process,
+         creates a virtualenv and reads/writes user-chosen config and backup
+         folders. -->
+
+    <!-- Required so the hardened runtime allows the bundled CPython interpreter
+         to run and load the many third-party C-extension (.so) libraries that
+         Home Assistant's dependencies install via pip. Without
+         disable-library-validation, loading unsigned pip-installed .so files
+         from the virtualenv is blocked. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

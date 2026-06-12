@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>HomeAssistant</string>
+    <key>CFBundleDisplayName</key>
+    <string>Home Assistant</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.homeassistant.menubar</string>
+    <key>CFBundleExecutable</key>
+    <string>HomeAssistant</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Home Assistant discovers and communicates with smart-home devices on your local network.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Home Assistant uses Bluetooth to discover and connect to nearby smart-home devices.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_home-assistant._tcp</string>
+        <string>_hap._tcp</string>
+        <string>_googlecast._tcp</string>
+    </array>
+</dict>
+</plist>
