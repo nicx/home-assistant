@@ -49,6 +49,12 @@ final class ServerController: ObservableObject {
     private var restartAttempt = 0
     private var pendingRestart: DispatchWorkItem?
     private let backoffSeconds: [Double] = [1, 2, 5, 10, 30, 60]
+    /// Home Assistant exits with this code (`RESTART_EXIT_CODE` in
+    /// homeassistant/const.py) when it wants to be restarted: the UI "Restart"
+    /// button, the `homeassistant.restart` service, restart-requiring config
+    /// reloads, integrations like Spook, etc. It is an intentional restart, not
+    /// a crash.
+    private static let restartExitCode: Int32 = 100
     /// After this many consecutive failed auto-restarts, escalate with a
     /// distinct "auto-restart still failing" notification (once per episode).
     private let restartEscalateThreshold = 5
@@ -244,6 +250,31 @@ final class ServerController: ObservableObject {
                 startAfterStop = false
                 start()
             }
+            return
+        }
+
+        if code == Self.restartExitCode {
+            // Home Assistant asked to restart itself — a clean, intentional
+            // restart. Relaunch immediately, with no crash status, no fault
+            // mail and no exponential backoff.
+            log.appendSystem("Home Assistant requested a restart (exit code \(code))")
+            notifier.clear(HAConditions.serverDown)
+            restartAttempt = 0
+            escalatedThisEpisode = false
+            start()
+            return
+        }
+
+        if code == 0 {
+            // Clean shutdown initiated by Home Assistant itself (e.g. the
+            // `homeassistant.stop` service or "Stop" in the UI). The user wants
+            // it stopped — treat it as an intentional stop, not a crash, and do
+            // not auto-restart.
+            log.appendSystem("Home Assistant shut down cleanly (exit code 0) — staying stopped")
+            status = .stopped
+            notifier.clear(HAConditions.serverDown)
+            restartAttempt = 0
+            escalatedThisEpisode = false
             return
         }
 
