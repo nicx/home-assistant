@@ -115,6 +115,21 @@ enum BundledRuntime {
 
     static var isHomeAssistantInstalled: Bool { installedHAVersion != nil }
 
+    /// Whether a pip package is installed in the venv, detected via its
+    /// `<name>-<version>.dist-info` directory (no interpreter launch).
+    static func isPackageInstalled(_ name: String) -> Bool {
+        guard let site = venvSitePackagesURL,
+              let entries = try? FileManager.default.contentsOfDirectory(atPath: site.path) else { return false }
+        let target = name.lowercased().replacingOccurrences(of: "-", with: "_")
+        return entries.contains { entry in
+            let lower = entry.lowercased()
+            guard lower.hasSuffix(".dist-info") else { return false }
+            let stem = lower.dropLast(".dist-info".count)         // e.g. "aioesphomeapi-45.3.1"
+            let project = stem.split(separator: "-").first.map(String.init) ?? ""
+            return project == target
+        }
+    }
+
     // MARK: - Launch
 
     /// True once both the bundled interpreter and a Home Assistant virtualenv

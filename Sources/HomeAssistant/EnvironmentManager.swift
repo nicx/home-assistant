@@ -17,6 +17,20 @@ final class EnvironmentManager: ObservableObject {
 
     private let log: LogStore
 
+    /// Packages that Home Assistant *core* components import at load time but do
+    /// NOT declare as installable requirements, so they are never auto-installed
+    /// in a fresh virtualenv (on HA OS they happen to be pre-baked).
+    ///
+    /// `aioesphomeapi`: the `usb` core component imports
+    /// `serialx.platforms.serial_esphome`, which hard-imports `aioesphomeapi`.
+    /// When it is missing, `usb` fails to import → `bluetooth` (depends on usb)
+    /// fails → `default_config` and every BLE integration (Shelly, ESPHome,
+    /// SwitchBot, Xiaomi/BTHome/Govee BLE, HomeKit Controller …) cascade-fail.
+    /// `esphome` is the only integration that would install it, but it never
+    /// gets set up because of that same cascade — a bootstrap deadlock. Seeding
+    /// it here breaks the deadlock once and for all.
+    private let bootstrapDependencies = ["aioesphomeapi"]
+
     init(log: LogStore) {
         self.log = log
     }
@@ -85,6 +99,19 @@ final class EnvironmentManager: ObservableObject {
             let code = try await runStreaming(venvPython, ["-m", "pip", "install", "homeassistant"])
             guard code == 0 else { throw EnvError.installFailed(code) }
             log.appendSystem("Home Assistant \(BundledRuntime.installedHAVersion ?? "?") installed")
+        }
+
+        // Seed bootstrap dependencies that HA core components import but never
+        // install themselves (see `bootstrapDependencies`). Checked on every
+        // start so existing/migrated environments self-heal.
+        let missing = bootstrapDependencies.filter { !BundledRuntime.isPackageInstalled($0) }
+        if !missing.isEmpty {
+            isWorking = true
+            defer { isWorking = false }
+            progress("Installiere Zusatzpakete (\(missing.joined(separator: ", ")))…")
+            log.appendSystem("Installing bootstrap dependencies: \(missing.joined(separator: ", "))")
+            let code = try await runStreaming(venvPython, ["-m", "pip", "install"] + missing)
+            guard code == 0 else { throw EnvError.installFailed(code) }
         }
     }
 
