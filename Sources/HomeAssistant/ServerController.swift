@@ -176,8 +176,9 @@ final class ServerController: ObservableObject {
 
         proc.terminationHandler = { [weak self] finished in
             let code = finished.terminationStatus
+            let reason = finished.terminationReason // .exited | .uncaughtSignal
             DispatchQueue.main.async {
-                self?.handleTermination(code: code)
+                self?.handleTermination(code: code, reason: reason)
             }
         }
 
@@ -231,7 +232,11 @@ final class ServerController: ObservableObject {
         }
     }
 
-    private func handleTermination(code: Int32) {
+    private func handleTermination(code: Int32, reason: Process.TerminationReason) {
+        // Capture before we reset state below: a GUI restart hits a healthy,
+        // running instance, whereas a startup crash-loop never reached running.
+        let wasRunning = (status == .running)
+
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
         process = nil
@@ -253,23 +258,28 @@ final class ServerController: ObservableObject {
             return
         }
 
-        if code == Self.restartExitCode {
-            // Home Assistant asked to restart itself — a clean, intentional
-            // restart. Relaunch immediately, with no crash status, no fault
-            // mail and no exponential backoff.
-            log.appendSystem("Home Assistant requested a restart (exit code \(code))")
-            notifier.clear(HAConditions.serverDown)
-            restartAttempt = 0
-            escalatedThisEpisode = false
-            start()
+        let bySignal = (reason == .uncaughtSignal)
+
+        // Intentional restart requested by Home Assistant. Two manifestations:
+        //  - a clean exit with RESTART_EXIT_CODE (100), or
+        //  - SIGABRT (signal 6) while a healthy instance shuts down: HA returns
+        //    100, but a C-extension aborts during interpreter teardown on macOS
+        //    (bleak/CoreBluetooth, grpc, …), which masks the exit code. Only
+        //    trust SIGABRT when HA had reached `running`, so a startup crash
+        //    loop is never mistaken for a restart.
+        if (!bySignal && code == Self.restartExitCode)
+            || (bySignal && code == SIGABRT && wasRunning) {
+            let how = bySignal
+                ? "shut down via \(Self.signalName(code)) (teardown abort)"
+                : "requested a restart (exit code \(code))"
+            log.appendSystem("Home Assistant \(how) — restarting")
+            cleanRestart()
             return
         }
 
-        if code == 0 {
-            // Clean shutdown initiated by Home Assistant itself (e.g. the
-            // `homeassistant.stop` service or "Stop" in the UI). The user wants
-            // it stopped — treat it as an intentional stop, not a crash, and do
-            // not auto-restart.
+        // Clean shutdown initiated by Home Assistant itself (homeassistant.stop
+        // service / "Stop" in the UI). Stay stopped, no auto-restart.
+        if !bySignal && code == 0 {
             log.appendSystem("Home Assistant shut down cleanly (exit code 0) — staying stopped")
             status = .stopped
             notifier.clear(HAConditions.serverDown)
@@ -278,16 +288,43 @@ final class ServerController: ObservableObject {
             return
         }
 
-        let reason = "exited with code \(code)"
-        status = .crashed(reason)
-        lastError = reason
-        log.appendSystem("Server \(reason)")
+        // Anything else is a genuine crash.
+        let reasonText = bySignal
+            ? "killed by \(Self.signalName(code))"
+            : "exited with code \(code)"
+        status = .crashed(reasonText)
+        lastError = reasonText
+        log.appendSystem("Server \(reasonText)")
         // Debounced: one "abgestürzt" mail per down-episode, regardless of how
         // many auto-restart attempts follow.
-        notifier.report(HAConditions.serverDown, healthy: false, detail: reason)
+        notifier.report(HAConditions.serverDown, healthy: false, detail: reasonText)
 
         guard settings.autoRestart else { return }
         scheduleRestart()
+    }
+
+    /// Relaunch after an intentional Home Assistant restart: no crash status,
+    /// no fault mail, no exponential backoff.
+    private func cleanRestart() {
+        notifier.clear(HAConditions.serverDown)
+        restartAttempt = 0
+        escalatedThisEpisode = false
+        start()
+    }
+
+    /// Human-readable name for a termination signal (for log/mail text).
+    private static func signalName(_ sig: Int32) -> String {
+        switch sig {
+        case SIGABRT: return "SIGABRT"
+        case SIGKILL: return "SIGKILL"
+        case SIGSEGV: return "SIGSEGV"
+        case SIGTERM: return "SIGTERM"
+        case SIGINT:  return "SIGINT"
+        case SIGBUS:  return "SIGBUS"
+        case SIGILL:  return "SIGILL"
+        case SIGHUP:  return "SIGHUP"
+        default:      return "signal \(sig)"
+        }
     }
 
     private func scheduleRestart() {
