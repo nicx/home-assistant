@@ -27,6 +27,15 @@ venv unter `~/Library/HomeAssistant/venv` installiert. Details: README.
   wertet jetzt `terminationReason` aus: SIGABRT bei *laufender* Instanz =
   gewollter Neustart (keine Crash-Mail/Backoff); echte Abstürze heißen korrekt
   „killed by <SIGNAL>".
+- `fix: gate Home Assistant launch on network readiness` — beim Login/Boot
+  startet die App HA oft, **bevor** der Mac Netzwerk hat: LAN-Integrationen
+  melden „Network is unreachable", Cloud-Integrationen (easee, octopus) „Could
+  not contact DNS servers" und verbrauchen ihre Setup-Retries → bleiben tot.
+  Neuer `NetworkReadiness`-Gate (`ServerController.waitForNetwork()`): wartet vor
+  dem Start, bis ein Interface `.satisfied` ist **und** eine TCP/DNS-Probe zu
+  einem von mehreren stabilen Hosts klappt. Online = keine Verzögerung; offline
+  begrenzt auf 90 s (danach Start trotzdem, HAs eigener Retry greift); manueller
+  Stopp während der Wartezeit bricht sauber ab.
 
 ## Build & Start (neuer Rechner)
 

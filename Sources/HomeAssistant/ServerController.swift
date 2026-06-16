@@ -86,8 +86,17 @@ final class ServerController: ObservableObject {
     private func startAsync() async {
         isPreparing = true
         defer { isPreparing = false }
+        // A freshly requested start clears any prior intentional-stop latch; we
+        // re-check it after the (possibly long) network wait below.
+        intentionalStop = false
         do {
             status = .installing("Prüfe Laufzeitumgebung…")
+            await waitForNetwork()
+            if intentionalStop {
+                status = .stopped
+                log.appendSystem("Start abgebrochen (während Netzwerk-Wartezeit gestoppt)")
+                return
+            }
             try await env.ensureReady { [weak self] message in
                 guard let self, case .installing = self.status else { return }
                 self.status = .installing(message)
@@ -101,6 +110,28 @@ final class ServerController: ObservableObject {
             lastError = error.localizedDescription
             log.appendSystem("Start failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Cold-boot guard: at login the app can launch before the Mac has network,
+    /// which makes cloud integrations (easee, octopus, …) exhaust their setup
+    /// retries and stay dead. Wait until the network is genuinely usable
+    /// (interface up + DNS/TCP probe), polling every 2s, bounded by a timeout so
+    /// an offline Mac still starts — Home Assistant's own retry then takes over.
+    private func waitForNetwork() async {
+        let timeout: TimeInterval = 90
+        if await NetworkReadiness.isReady() { return } // already online: no delay
+        log.appendSystem("Warte auf Netzwerk, bevor Home Assistant startet…")
+        if case .installing = status { status = .installing("Warte auf Netzwerk…") }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if intentionalStop { return } // user stopped during the wait
+            if await NetworkReadiness.isReady() {
+                log.appendSystem("Netzwerk erreichbar — starte Home Assistant")
+                return
+            }
+        }
+        log.appendSystem("Netzwerk nach \(Int(timeout))s nicht bestätigt — starte Home Assistant trotzdem")
     }
 
     /// Stop the server intentionally (no keepalive restart).
