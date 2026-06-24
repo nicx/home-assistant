@@ -119,6 +119,16 @@ enum BundledRuntime {
     /// find ffmpeg with no `ffmpeg:` config and no system install.
     static var ffmpegLinkURL: URL { venvRoot.appendingPathComponent("bin/ffmpeg") }
 
+    /// The bundled `go2rtc` binary (fetched by `Scripts/bundle-go2rtc.sh` into
+    /// the embedded Runtime, signed into the `.app`). Home Assistant's go2rtc
+    /// integration discovers it via `which go2rtc` on PATH and then *manages*
+    /// it (spawns it on port 11984, lets it exec the bundled ffmpeg) — giving
+    /// fast RTSP camera snapshots + WebRTC with no system install.
+    static var bundledGo2rtcURL: URL { runtimeRoot.appendingPathComponent("go2rtc/go2rtc") }
+
+    /// Stable `go2rtc` name on the venv's `bin/` dir (on the launched HA PATH).
+    static var go2rtcLinkURL: URL { venvRoot.appendingPathComponent("bin/go2rtc") }
+
     /// Installed Home Assistant version, read from the `homeassistant-*.dist-info`
     /// directory name in site-packages (no interpreter launch needed).
     static var installedHAVersion: String? {
