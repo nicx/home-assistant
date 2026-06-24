@@ -101,6 +101,24 @@ enum BundledRuntime {
         return venvRoot.appendingPathComponent("lib/\(minor)/site-packages", isDirectory: true)
     }
 
+    /// The static, native ffmpeg binary shipped by the `imageio-ffmpeg` pip
+    /// package (resolved by globbing its `binaries/` dir — the filename carries
+    /// a version, e.g. `ffmpeg-macos-aarch64-v7.1`). Home Assistant needs ffmpeg
+    /// to grab snapshots from RTSP-only cameras; bundling it via the venv avoids
+    /// any system (brew) install.
+    static var imageioFFmpegURL: URL? {
+        guard let site = venvSitePackagesURL else { return nil }
+        let dir = site.appendingPathComponent("imageio_ffmpeg/binaries", isDirectory: true)
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        guard let name = entries.first(where: { $0.hasPrefix("ffmpeg-") }) else { return nil }
+        return dir.appendingPathComponent(name)
+    }
+
+    /// Stable `ffmpeg` name on the venv's `bin/` dir. That dir is prepended to
+    /// the launched Home Assistant process's PATH, so a symlink here makes HA
+    /// find ffmpeg with no `ffmpeg:` config and no system install.
+    static var ffmpegLinkURL: URL { venvRoot.appendingPathComponent("bin/ffmpeg") }
+
     /// Installed Home Assistant version, read from the `homeassistant-*.dist-info`
     /// directory name in site-packages (no interpreter launch needed).
     static var installedHAVersion: String? {

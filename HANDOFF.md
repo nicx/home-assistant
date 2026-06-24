@@ -36,6 +36,14 @@ venv unter `~/Library/HomeAssistant/venv` installiert. Details: README.
   einem von mehreren stabilen Hosts klappt. Online = keine Verzögerung; offline
   begrenzt auf 90 s (danach Start trotzdem, HAs eigener Retry greift); manueller
   Stopp während der Wartezeit bricht sauber ab.
+- `feat: bundle ffmpeg via imageio-ffmpeg for RTSP camera snapshots` — RTSP-only
+  Kameras (generic, nur `stream_source`) brauchen ffmpeg für `camera.snapshot`;
+  ohne ffmpeg „Unable to get snapshot: Timed out". Statt System-`brew install`
+  wird `imageio-ffmpeg` (statisches, natives arm64-ffmpeg) als Bootstrap-Dep in
+  die venv installiert und per Symlink `…/venv/bin/ffmpeg` (liegt im PATH des
+  HA-Prozesses) bereitgestellt — kein Terminal/brew nötig, übersteht
+  venv-Neuaufbau. Siehe `EnvironmentManager.linkBundledFFmpeg` +
+  `BundledRuntime.imageioFFmpegURL`.
 
 ## Build & Start (neuer Rechner)
 
@@ -68,8 +76,9 @@ erzeugt. Die Laufzeitdaten (venv, Config, Backups) liegen unter
   In *Einstellungen → Allgemein → E-Mail-Benachrichtigung* Empfänger eintragen
   und Toggles („bei Update" / „bei Störungen") setzen. Versand läuft über einen
   lokalen MailRelay (Standard `127.0.0.1:2525`, wie beim evcc-Projekt).
-- **Optional `brew install ffmpeg`** (Kamera/Medien) und turbojpeg
-  (Kamera-Snapshots) — sonst nur Warnungen im HA-Log, nicht kritisch.
+- **ffmpeg** ist jetzt gebündelt (via `imageio-ffmpeg` in der venv) — kein
+  `brew install` mehr nötig. Nur `libturbojpeg` fehlt weiterhin (rein optional:
+  „Camera snapshot performance will be sub-optimal", Snapshots klappen trotzdem).
 - **Kein App-Icon**: `Resources/AppIcon.icns` fehlt; `make-app.sh` bindet es
   automatisch ein, sobald vorhanden.
 

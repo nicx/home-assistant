@@ -29,7 +29,12 @@ final class EnvironmentManager: ObservableObject {
     /// `esphome` is the only integration that would install it, but it never
     /// gets set up because of that same cascade — a bootstrap deadlock. Seeding
     /// it here breaks the deadlock once and for all.
-    private let bootstrapDependencies = ["aioesphomeapi"]
+    ///
+    /// `imageio-ffmpeg`: ships a static, native ffmpeg binary. Home Assistant
+    /// needs ffmpeg to grab snapshots/streams from RTSP-only cameras; bundling
+    /// it through the venv (then symlinked onto PATH, see `linkBundledFFmpeg`)
+    /// keeps the "no terminal, no system install" promise — no `brew install`.
+    private let bootstrapDependencies = ["aioesphomeapi", "imageio-ffmpeg"]
 
     init(log: LogStore) {
         self.log = log
@@ -112,6 +117,28 @@ final class EnvironmentManager: ObservableObject {
             log.appendSystem("Installing bootstrap dependencies: \(missing.joined(separator: ", "))")
             let code = try await runStreaming(venvPython, ["-m", "pip", "install"] + missing)
             guard code == 0 else { throw EnvError.installFailed(code) }
+        }
+
+        // Expose the bundled ffmpeg under a stable name on PATH (idempotent;
+        // re-points after a version bump or venv rebuild).
+        linkBundledFFmpeg()
+    }
+
+    /// Symlink the `imageio-ffmpeg` binary to `…/venv/bin/ffmpeg`. That dir is
+    /// first on the launched Home Assistant process's PATH, so HA resolves
+    /// `ffmpeg` automatically — no `ffmpeg:` config, no system install.
+    private func linkBundledFFmpeg() {
+        guard let exe = BundledRuntime.imageioFFmpegURL else { return }
+        let link = BundledRuntime.ffmpegLinkURL
+        let fm = FileManager.default
+        // Already correct? leave it.
+        if let dest = try? fm.destinationOfSymbolicLink(atPath: link.path), dest == exe.path { return }
+        try? fm.removeItem(at: link)
+        do {
+            try fm.createSymbolicLink(at: link, withDestinationURL: exe)
+            log.appendSystem("Linked bundled ffmpeg → \(exe.lastPathComponent)")
+        } catch {
+            log.appendSystem("Could not link bundled ffmpeg: \(error.localizedDescription)")
         }
     }
 
