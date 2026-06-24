@@ -42,17 +42,8 @@ venv unter `~/Library/HomeAssistant/venv` installiert. Details: README.
   wird `imageio-ffmpeg` (statisches, natives arm64-ffmpeg) als Bootstrap-Dep in
   die venv installiert und per Symlink `…/venv/bin/ffmpeg` (liegt im PATH des
   HA-Prozesses) bereitgestellt — kein Terminal/brew nötig, übersteht
-  venv-Neuaufbau. Siehe `EnvironmentManager.linkBundledBinaries` +
+  venv-Neuaufbau. Siehe `EnvironmentManager.linkBundledFFmpeg` +
   `BundledRuntime.imageioFFmpegURL`.
-- `feat: bundle go2rtc for fast RTSP camera snapshots / WebRTC` — RTSP-only
-  Kameras (Aqara-Türklingel, direkter RTSP) waren über HAs PyAV-Stream-Snapshot
-  zu langsam (>10 s Timeout, zwei parallel erst recht). Das go2rtc-Binary
-  (`v1.9.14` = HAs `RECOMMENDED_VERSION`) wird in die `.app` gebündelt
-  (`Scripts/bundle-go2rtc.sh` → `Runtime/go2rtc/go2rtc`) und per Symlink auf
-  `…/venv/bin/go2rtc` (im HA-PATH) bereitgestellt. HAs go2rtc-Integration findet
-  es via `which go2rtc` und **managt es selbst** (Port 11984), nutzt das
-  gebündelte ffmpeg → schnelle Snapshots + WebRTC, ohne System-Install/User-YAML.
-  Siehe `BundledRuntime.bundledGo2rtcURL`, `EnvironmentManager.linkBundledBinaries`.
 
 ## Build & Start (neuer Rechner)
 
@@ -62,7 +53,6 @@ Voraussetzungen: Apple Silicon, Xcode/Command Line Tools, Homebrew.
 git clone https://github.com/nicx/home-assistant
 cd home-assistant
 ./Scripts/bundle-runtime.sh   # lädt CPython 3.14 → ./Runtime
-./Scripts/bundle-go2rtc.sh    # lädt go2rtc-Binary → ./Runtime/go2rtc
 ./Scripts/make-app.sh         # baut & signiert ./dist/HomeAssistant.app
 open dist/HomeAssistant.app
 ```

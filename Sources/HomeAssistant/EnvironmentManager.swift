@@ -119,35 +119,26 @@ final class EnvironmentManager: ObservableObject {
             guard code == 0 else { throw EnvError.installFailed(code) }
         }
 
-        // Expose the bundled helper binaries under stable names on PATH
-        // (idempotent; re-points after a version bump or venv rebuild).
-        linkBundledBinaries()
+        // Expose the bundled ffmpeg under a stable name on PATH (idempotent;
+        // re-points after a version bump or venv rebuild).
+        linkBundledFFmpeg()
     }
 
-    /// Symlink the bundled helper binaries onto `…/venv/bin` — that dir is first
-    /// on the launched Home Assistant process's PATH, so HA resolves `ffmpeg`
-    /// and `go2rtc` automatically (no config, no system install). HA then
-    /// manages go2rtc itself (`which go2rtc` → spawn), which uses `ffmpeg` for
-    /// fast RTSP snapshots/WebRTC.
-    private func linkBundledBinaries() {
-        // ffmpeg ships via the `imageio-ffmpeg` pip package (in the venv).
-        symlinkBinary(BundledRuntime.imageioFFmpegURL, to: BundledRuntime.ffmpegLinkURL, name: "ffmpeg")
-        // go2rtc is a binary bundled inside the .app's Runtime.
-        let g2 = BundledRuntime.bundledGo2rtcURL
-        symlinkBinary(FileManager.default.isExecutableFile(atPath: g2.path) ? g2 : nil,
-                      to: BundledRuntime.go2rtcLinkURL, name: "go2rtc")
-    }
-
-    private func symlinkBinary(_ exe: URL?, to linkURL: URL, name: String) {
-        guard let exe else { return }
+    /// Symlink the `imageio-ffmpeg` binary to `…/venv/bin/ffmpeg`. That dir is
+    /// first on the launched Home Assistant process's PATH, so HA resolves
+    /// `ffmpeg` automatically — no `ffmpeg:` config, no system install.
+    private func linkBundledFFmpeg() {
+        guard let exe = BundledRuntime.imageioFFmpegURL else { return }
+        let link = BundledRuntime.ffmpegLinkURL
         let fm = FileManager.default
-        if let dest = try? fm.destinationOfSymbolicLink(atPath: linkURL.path), dest == exe.path { return }
-        try? fm.removeItem(at: linkURL)
+        // Already correct? leave it.
+        if let dest = try? fm.destinationOfSymbolicLink(atPath: link.path), dest == exe.path { return }
+        try? fm.removeItem(at: link)
         do {
-            try fm.createSymbolicLink(at: linkURL, withDestinationURL: exe)
-            log.appendSystem("Linked bundled \(name) → \(exe.lastPathComponent)")
+            try fm.createSymbolicLink(at: link, withDestinationURL: exe)
+            log.appendSystem("Linked bundled ffmpeg → \(exe.lastPathComponent)")
         } catch {
-            log.appendSystem("Could not link bundled \(name): \(error.localizedDescription)")
+            log.appendSystem("Could not link bundled ffmpeg: \(error.localizedDescription)")
         }
     }
 
