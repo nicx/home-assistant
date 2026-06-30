@@ -87,11 +87,14 @@ final class UpdateMonitor: ObservableObject {
         guard latest != lastNotifiedVersion else { return }
 
         let subject = "Home Assistant \(latest) verfügbar"
+        let changelogURL = "https://github.com/home-assistant/core/releases/tag/\(latest)"
         let body = """
         Eine neue Home Assistant-Version ist verfügbar.
 
         Installiert: \(installed)
         Verfügbar:   \(latest)
+
+        Changelog: \(changelogURL)
 
         Aktualisieren über das Menüleisten-Symbol → Einstellungen → Allgemein → \
         „Home Assistant aktualisieren“.
