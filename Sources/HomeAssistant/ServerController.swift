@@ -59,6 +59,12 @@ final class ServerController: ObservableObject {
     /// distinct "auto-restart still failing" notification (once per episode).
     private let restartEscalateThreshold = 5
     private var escalatedThisEpisode = false
+    /// True while the late-network watcher (armLateNetworkRestart) is active, to
+    /// prevent a second watcher from being armed concurrently.
+    private var lateNetworkWatchRunning = false
+    /// Latched once we have performed the single automatic "network came up
+    /// late" restart, so it never fires more than once per app session.
+    private var lateNetworkRestartDone = false
 
     init(settings: AppSettings, log: LogStore, env: EnvironmentManager, notifier: Notifier) {
         self.settings = settings
@@ -91,7 +97,7 @@ final class ServerController: ObservableObject {
         intentionalStop = false
         do {
             status = .installing("Prüfe Laufzeitumgebung…")
-            await waitForNetwork()
+            let networkConfirmed = await waitForNetwork()
             if intentionalStop {
                 status = .stopped
                 log.appendSystem("Start abgebrochen (während Netzwerk-Wartezeit gestoppt)")
@@ -105,6 +111,10 @@ final class ServerController: ObservableObject {
             try FileManager.default.createDirectory(at: settings.configURL, withIntermediateDirectories: true)
             try BundledRuntime.validate()
             try launch(arguments: BundledRuntime.arguments(for: settings))
+            // Started without confirmed network (the wait timed out): keep
+            // watching and restart once when the network finally comes up, so
+            // integrations that exhausted their setup-retries recover cleanly.
+            if !networkConfirmed { armLateNetworkRestart() }
         } catch {
             status = .crashed(error.localizedDescription)
             lastError = error.localizedDescription
@@ -117,21 +127,68 @@ final class ServerController: ObservableObject {
     /// retries and stay dead. Wait until the network is genuinely usable
     /// (interface up + DNS/TCP probe), polling every 2s, bounded by a timeout so
     /// an offline Mac still starts — Home Assistant's own retry then takes over.
-    private func waitForNetwork() async {
-        let timeout: TimeInterval = 90
-        if await NetworkReadiness.isReady() { return } // already online: no delay
+    ///
+    /// Returns `true` if the network was confirmed usable, `false` if we gave up
+    /// (timeout) or were stopped mid-wait. A `false` after a real timeout arms
+    /// `armLateNetworkRestart()`. The cap is generous (a Thunderbolt/USB Ethernet
+    /// adapter can take ~2 min to come up after a cold boot — observed on this
+    /// Mac mini, where the old 90s cap fired early and HA started network-less).
+    private func waitForNetwork() async -> Bool {
+        let timeout: TimeInterval = 300
+        if await NetworkReadiness.isReady() { return true } // already online: no delay
         log.appendSystem("Warte auf Netzwerk, bevor Home Assistant startet…")
         if case .installing = status { status = .installing("Warte auf Netzwerk…") }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if intentionalStop { return } // user stopped during the wait
+            if intentionalStop { return false } // user stopped during the wait
             if await NetworkReadiness.isReady() {
                 log.appendSystem("Netzwerk erreichbar — starte Home Assistant")
-                return
+                return true
             }
         }
         log.appendSystem("Netzwerk nach \(Int(timeout))s nicht bestätigt — starte Home Assistant trotzdem")
+        return false
+    }
+
+    /// Backstop for a cold boot where the network comes up *later* than the
+    /// `waitForNetwork()` cap (e.g. a very slow adapter or a delayed WAN): HA is
+    /// already running, but cloud/LAN integrations that ran out of setup-retries
+    /// in the network-less window stay dead. Keep probing in the background and,
+    /// the moment the network is genuinely usable, restart Home Assistant
+    /// **exactly once** so those integrations initialise cleanly. Bounded to a
+    /// single restart and a 15-minute window so a truly offline Mac never
+    /// restart-loops (HA's own retry handles it from there).
+    private func armLateNetworkRestart() {
+        guard !lateNetworkWatchRunning, !lateNetworkRestartDone else { return }
+        lateNetworkWatchRunning = true
+        log.appendSystem("Ohne bestätigtes Netzwerk gestartet — überwache Netz für einen einmaligen Neustart")
+        Task { [weak self] in
+            let deadline = Date().addingTimeInterval(15 * 60)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self else { return }
+                // Stop watching if HA is no longer up or the user intervened.
+                guard self.process != nil, !self.intentionalStop,
+                      self.status == .running || self.status == .starting else {
+                    self.lateNetworkWatchRunning = false
+                    return
+                }
+                if await NetworkReadiness.isReady() {
+                    guard self.process != nil, !self.intentionalStop else {
+                        self.lateNetworkWatchRunning = false
+                        return
+                    }
+                    self.lateNetworkRestartDone = true
+                    self.lateNetworkWatchRunning = false
+                    self.log.appendSystem("Netzwerk jetzt verfügbar — einmaliger Neustart, damit Integrationen sauber laden")
+                    self.restart()
+                    return
+                }
+            }
+            self?.lateNetworkWatchRunning = false
+            self?.log.appendSystem("Netz-Überwachung beendet (15 min ohne bestätigtes Netzwerk) — kein Neustart")
+        }
     }
 
     /// Stop the server intentionally (no keepalive restart).
