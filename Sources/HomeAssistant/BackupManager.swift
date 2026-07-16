@@ -115,7 +115,7 @@ final class BackupManager: ObservableObject {
         let ok: Bool
         do {
             try? FileManager.default.removeItem(at: partial)
-            try await ditto(["-c", "-k", "--sequesterRsrc", "--keepParent", config.path, partial.path])
+            try await ditto(["-c", "-k", "--norsrc", "--noextattr", "--keepParent", config.path, partial.path])
             try FileManager.default.moveItem(at: partial, to: archive)
             ok = true
         } catch {
@@ -152,7 +152,7 @@ final class BackupManager: ObservableObject {
             try? FileManager.default.createDirectory(at: settings.backupURL, withIntermediateDirectories: true)
             let safety = settings.backupURL.appendingPathComponent("pre-restore-\(archiveName())")
             if FileManager.default.fileExists(atPath: settings.configPath) {
-                try await ditto(["-c", "-k", "--sequesterRsrc", "--keepParent", settings.configPath, safety.path])
+                try await ditto(["-c", "-k", "--norsrc", "--noextattr", "--keepParent", settings.configPath, safety.path])
             }
             // Replace the config directory with the archive contents.
             let parent = settings.configURL.deletingLastPathComponent()
@@ -211,6 +211,10 @@ final class BackupManager: ObservableObject {
         }
     }
 
+    /// Archive/extract via `ditto`. Callers pass `--norsrc --noextattr`, not
+    /// `--sequesterRsrc`: the config tree carries no meaningful resource forks,
+    /// and sequestering emits one `__MACOSX/._*` AppleDouble entry per file
+    /// (7k of 13k entries in a real archive) for no benefit.
     private func ditto(_ args: [String]) async throws {
         try await runProcess(URL(fileURLWithPath: "/usr/bin/ditto"), args)
     }
