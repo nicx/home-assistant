@@ -110,6 +110,9 @@ final class ServerController: ObservableObject {
             detectedVersion = BundledRuntime.installedHAVersion
             try FileManager.default.createDirectory(at: settings.configURL, withIntermediateDirectories: true)
             try BundledRuntime.validate()
+            // Last thing before launching, so the takeover window is as short as
+            // possible: clear any orphaned instance still holding the config dir.
+            await reclaimOrphanInstance()
             try launch(arguments: BundledRuntime.arguments(for: settings))
             // Started without confirmed network (the wait timed out): keep
             // watching and restart once when the network finally comes up, so
@@ -189,6 +192,107 @@ final class ServerController: ObservableObject {
             self?.lateNetworkWatchRunning = false
             self?.log.appendSystem("Netz-Überwachung beendet (15 min ohne bestätigtes Netzwerk) — kein Neustart")
         }
+    }
+
+    /// Home Assistant guards its config directory with an advisory `flock` on
+    /// `.ha_run.lock` (`runner.ensure_single_execution`); a second instance
+    /// prints "Another Home Assistant instance is already running!" and exits 1.
+    ///
+    /// Normally `terminateNow()` tears our child down with the app, but a hard
+    /// app crash or a hung/killed login session skips that — and the orphaned
+    /// `hass` keeps holding the lock. We then have no process handle, so every
+    /// keepalive attempt spawns a doomed instance that exits 1 at once: an
+    /// endless restart loop plus "Auto-Restart gescheitert" mails, with no
+    /// Home Assistant under our control (seen 2026-07-16, orphan PID 792).
+    /// Retrying can never fix this, so reclaim the directory instead: shut the
+    /// orphan down (SIGTERM, escalating to SIGKILL) and let the caller launch.
+    private func reclaimOrphanInstance() async {
+        guard let pid = orphanInstancePID() else { return }
+        log.appendSystem("Verwaiste Home-Assistant-Instanz (PID \(pid)) hält das Config-Verzeichnis — wird für die Übernahme beendet")
+        kill(pid, SIGTERM)
+        // Wait on the lock rather than the PID: a released lock is exactly the
+        // precondition for launching, and it also covers an unreaped zombie,
+        // which still answers kill(pid, 0) but holds no file descriptors.
+        if await lockReleased(within: 20) {
+            log.appendSystem("Verwaiste Instanz beendet — übernehme Home Assistant")
+            return
+        }
+        log.appendSystem("Verwaiste Instanz reagiert nicht auf SIGTERM — SIGKILL")
+        kill(pid, SIGKILL)
+        if !(await lockReleased(within: 5)) {
+            log.appendSystem("Config-Lock weiterhin belegt — Start wird vermutlich scheitern")
+        }
+    }
+
+    /// Poll until nobody holds the config lock, up to `seconds`.
+    private func lockReleased(within seconds: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if !configLockIsHeld() { return true }
+        }
+        return false
+    }
+
+    /// PID of a Home Assistant holding *our* config directory that is not our
+    /// own child, or nil if there is none.
+    ///
+    /// Since we are about to send signals, the claim is proven, not guessed. The
+    /// lock itself is the authority: if we can take it, nothing is running and
+    /// there is nothing to reclaim — this alone rules out the everyday case of a
+    /// leftover `.ha_run.lock` (Home Assistant deliberately never unlinks it)
+    /// naming a PID that has long since been recycled. Only when the lock really
+    /// is held do we read the PID, which the holder writes *after* acquiring, so
+    /// while it is held the file names the holder. The command line is then
+    /// checked as a second, independent witness: our bundled venv interpreter,
+    /// running `-m homeassistant`, against this exact config directory. If that
+    /// disagrees we signal nothing and let Home Assistant's own error surface.
+    private func orphanInstancePID() -> pid_t? {
+        guard configLockIsHeld() else { return nil }
+        let lock = settings.configURL.appendingPathComponent(".ha_run.lock")
+        guard let data = try? Data(contentsOf: lock),
+              let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawPID = info["pid"] as? Int else { return nil }
+        let pid = pid_t(rawPID)
+        guard pid > 0, pid != process?.processIdentifier else { return nil }
+        guard kill(pid, 0) == 0 else { return nil }
+        guard let command = processCommand(pid),
+              command.contains(BundledRuntime.venvPythonURL.path),
+              command.contains("-m homeassistant"),
+              command.contains(settings.configPath) else {
+            log.appendSystem("Config-Lock ist belegt, aber PID \(pid) sieht nicht nach unserer Home-Assistant-Instanz aus — kein Eingriff")
+            return nil
+        }
+        return pid
+    }
+
+    /// Whether someone currently holds Home Assistant's `.ha_run.lock` — i.e. an
+    /// instance is live on this config directory. Probing by trying to take the
+    /// lock ourselves mirrors exactly what Home Assistant's own startup does, and
+    /// unlike the lock file's mere existence it cannot go stale: the kernel drops
+    /// an `flock` the moment its holder dies.
+    private func configLockIsHeld() -> Bool {
+        let lock = settings.configURL.appendingPathComponent(".ha_run.lock")
+        let fd = open(lock.path, O_RDONLY) // never O_CREAT: no lock file, no instance
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { return true }
+        flock(fd, LOCK_UN)
+        return false
+    }
+
+    /// Full command line of `pid`, or nil if it cannot be read.
+    private func processCommand(_ pid: pid_t) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-p", "\(pid)", "-o", "command="]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        guard (try? proc.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Stop the server intentionally (no keepalive restart).
